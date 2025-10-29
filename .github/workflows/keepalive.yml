@@ -1,9 +1,9 @@
 name: Keep Metamantenedor Awake
 
 on:
-  # Ejecuta cada 10 minutos (hora UTC)
+  # Ejecuta cada 2 minutos (hora UTC)
   schedule:
-    - cron: "*/5 * * * *"
+    - cron: "*/2 * * * *"
   # Permite lanzarlo manualmente
   workflow_dispatch:
 
