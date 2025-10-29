@@ -870,6 +870,20 @@ def run_server():
         print("\n⚠️ El servidor pidió salir (SystemExit). Ejecutando SELF TESTS...")
         if os.environ.get('RUN_SELF_TESTS', '0') != '1':
             run_self_tests()
+# --- KEEP-ALIVE HEALTH ENDPOINT (PEGA TODO ESTE BLOQUE) ---
+try:
+    app  # comprobar que 'app' ya existe en tu archivo
+except NameError:
+    from flask import Flask
+    app = Flask(__name__)
+
+from flask import jsonify
+
+@app.get("/healthz")
+def healthz():
+    # Endpoint mínimo para que Render/GitHub Actions verifiquen que la app está viva
+    return jsonify(status="ok"), 200
+# --- FIN KEEP-ALIVE HEALTH ENDPOINT ---
 
 
 if __name__ == '__main__':
