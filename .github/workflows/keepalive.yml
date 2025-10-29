@@ -2,16 +2,20 @@ name: Keep Metamantenedor Awake
 
 on:
   schedule:
+    # Tanda A: cada 5 min (00,05,10,15,20,…)
     - cron: "*/5 * * * *"
+    # Tanda B desfasada: (02,07,12,17,22,…)
+    - cron: "2-59/5 * * * *"
+  # Permite lanzarlo manualmente desde Actions > Run workflow
   workflow_dispatch:
-
 
 permissions:
   contents: read
 
 jobs:
   ping:
-    runs-on: ubuntu-latest
+    # Fijar imagen para evitar demoras por cambios de runner
+    runs-on: ubuntu-20.04
     timeout-minutes: 5
     steps:
       - name: Warm up endpoints
@@ -21,10 +25,12 @@ jobs:
             "https://metamantenedor.onrender.com/healthz"
             "https://metamantenedor.onrender.com/"
           )
+
           for url in "${urls[@]}"; do
             echo "Pinging $url"
-            # 2 intentos por si hay wake-up lento
-            (curl -fsS --max-time 10 "$url" >/dev/null || sleep 5 && curl -fsS --max-time 10 "$url" >/dev/null) \
+            # 2 intentos por si Render o el runner despiertan lento
+            (curl -fsS --max-time 10 "$url" >/dev/null \
+              || (sleep 5 && curl -fsS --max-time 10 "$url" >/dev/null)) \
               && echo "OK: $url" \
               || echo "WARNING: fallo de ping a $url (continuando)"
           done
