@@ -1,12 +1,9 @@
 name: Keep Metamantenedor Awake
 
 on:
+  # Ejecuta cada 5 minutos (hora UTC) y permite ejecución manual
   schedule:
-    # Tanda A: cada 5 min (00,05,10,15,20,…)
     - cron: "*/5 * * * *"
-    # Tanda B desfasada: (02,07,12,17,22,…)
-    - cron: "2-59/5 * * * *"
-  # Permite lanzarlo manualmente desde Actions > Run workflow
   workflow_dispatch:
 
 permissions:
@@ -14,8 +11,7 @@ permissions:
 
 jobs:
   ping:
-    # Fijar imagen para evitar demoras por cambios de runner
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: Warm up endpoints
@@ -24,13 +20,25 @@ jobs:
           urls=(
             "https://metamantenedor.onrender.com/healthz"
             "https://metamantenedor.onrender.com/"
+            "https://metamantenedor.onrender.com/form"
           )
 
+          # Reintentos para cubrir el wake-up de Render (≈90 s por URL máx)
           for url in "${urls[@]}"; do
             echo "Pinging $url"
-            # 2 intentos por si Render o el runner despiertan lento
-            (curl -fsS --max-time 10 "$url" >/dev/null \
-              || (sleep 5 && curl -fsS --max-time 10 "$url" >/dev/null)) \
-              && echo "OK: $url" \
-              || echo "WARNING: fallo de ping a $url (continuando)"
+            ok=false
+            for i in {1..6}; do
+              if curl -fsS --max-time 15 "$url" >/dev/null; then
+                ok=true
+                echo "OK: $url"
+                break
+              else
+                echo "Intento $i falló, esperando 15 s…"
+                sleep 15
+              fi
+            done
+            # Si no respondió 200, seguir igualmente (ya generó tráfico para despertar)
+            if [ "$ok" = false ]; then
+              echo "WARNING: $url no respondió 200 tras reintentos (continuando)."
+            fi
           done
