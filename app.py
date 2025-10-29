@@ -1,3 +1,6 @@
+
+from flask import jsonify
+
 # app.py
 # MVP: Carga diaria de desayunos, almuerzos y cenas por centro (login por correo)
 # Ejecutar con Anaconda (recomendado):
@@ -875,3 +878,8 @@ if __name__ == '__main__':
         run_self_tests()
     else:
         run_server()
+
+@app.get("/healthz")
+def healthz():
+    # Respuesta mínima para que el workflow vea 200 OK
+    return jsonify(status="ok"), 200
