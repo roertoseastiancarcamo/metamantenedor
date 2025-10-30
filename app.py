@@ -1,6 +1,3 @@
-
-from flask import jsonify
-
 # app.py
 # MVP: Carga diaria de desayunos, almuerzos y cenas por centro (login por correo)
 # Ejecutar con Anaconda (recomendado):
@@ -10,8 +7,10 @@ from flask import jsonify
 #   python app.py
 # Abrir: http://127.0.0.1:5000
 
-from flask import Flask, request, redirect, session, url_for
-from flask import render_template_string, send_file
+from flask import (
+    Flask, request, redirect, session, url_for,
+    render_template_string, send_file, jsonify
+)
 import sqlite3
 import os
 from datetime import date
@@ -179,7 +178,7 @@ BASE = """
 <header>
   <div style=\"display:flex;align-items:center;gap:8px\">
     <!-- Logo movido al pie -->
-    <strong>Registro de platos preparados Multi‑X</strong>
+    <strong>Registro de platos preparados Multi-X</strong>
   </div>
   <div>
     {% if session.get('email') %}
@@ -870,21 +869,13 @@ def run_server():
         print("\n⚠️ El servidor pidió salir (SystemExit). Ejecutando SELF TESTS...")
         if os.environ.get('RUN_SELF_TESTS', '0') != '1':
             run_self_tests()
-# --- KEEP-ALIVE HEALTH ENDPOINT (PEGA TODO ESTE BLOQUE) ---
-try:
-    app  # comprobar que 'app' ya existe en tu archivo
-except NameError:
-    from flask import Flask
-    app = Flask(__name__)
 
-from flask import jsonify
-
+# --- KEEP-ALIVE HEALTH ENDPOINT ---
 @app.get("/healthz")
 def healthz():
     # Endpoint mínimo para que Render/GitHub Actions verifiquen que la app está viva
     return jsonify(status="ok"), 200
 # --- FIN KEEP-ALIVE HEALTH ENDPOINT ---
-
 
 if __name__ == '__main__':
     app.jinja_env.globals['BASE'] = BASE
@@ -892,8 +883,3 @@ if __name__ == '__main__':
         run_self_tests()
     else:
         run_server()
-
-@app.get("/healthz")
-def healthz():
-    # Respuesta mínima para que el workflow vea 200 OK
-    return jsonify(status="ok"), 200
