@@ -10,7 +10,7 @@ USE_PG = bool(os.environ.get("DATABASE_URL"))
 PG_DSN = os.environ.get("DATABASE_URL")
 
 if USE_PG:
-    # psycopg v3 (puro Python). NO usar psycopg2.
+    # psycopg v3 (puro Python)
     import psycopg
     from psycopg.rows import dict_row
 
@@ -21,7 +21,6 @@ DB_PATH = os.environ.get("APP_DB", "data.db")  # usado sólo si no hay DATABASE_
 def db():
     """Conexión a la BD (Postgres o SQLite)."""
     if USE_PG:
-        # row_factory=dict_row devuelve filas como dict (similar a sqlite3.Row)
         return psycopg.connect(PG_DSN, row_factory=dict_row)
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
@@ -29,7 +28,7 @@ def db():
 
 
 def q(sql: str) -> str:
-    """Compatibilidad de placeholders: '?' -> '%s' si estamos en Postgres."""
+    """Compat de placeholders: '?' -> '%s' si estamos en Postgres."""
     return sql.replace('?', '%s') if USE_PG else sql
 
 
@@ -40,6 +39,7 @@ app = Flask(__name__)
 app.config['ENV'] = 'production'
 app.config['DEBUG'] = False
 app.secret_key = APP_SECRET
+
 
 # -------------------------------------------------
 # Datos base
@@ -62,6 +62,7 @@ CENTROS = [
 ADMIN_EMAILS = set(os.environ.get("APP_ADMINS", "rcarcamo@multix").split(","))
 AREAS = sorted({a for _, _, a in CENTROS})
 CENTRO_NOMBRES = sorted({c for _, c, _ in CENTROS})
+
 
 # -------------------------------------------------
 # INIT DB (dual: Postgres o SQLite)
@@ -104,7 +105,6 @@ def init_db():
                 value TEXT
             );
         """)
-        # lock_until default
         cur.execute("""
             INSERT INTO settings(key, value)
             VALUES ('lock_until','')
@@ -175,6 +175,7 @@ with app.app_context():
         os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     init_db()
 
+
 # -------------------------------------------------
 # Templates
 # -------------------------------------------------
@@ -186,7 +187,7 @@ BASE = """
   <title>{{ title or 'Dotación Comedor Diario' }}</title>
   <style>
     :root{--brand:#1e3a8a;--brand-2:#0ea5e9;--bg:#f7f8fb;--text:#0f172a;--muted:#64748b}
-    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,'Helvetica Neue',Arial,sans-serif;margin:0;background:var(--bg);color:var(--text);font-size:14px}
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,'Helvetica Neue',Arial,sans-serif;margin:0;background:var(--bg);color:#0f172a;font-size:14px}
     header{display:flex;justify-content:space-between;align-items:center;padding:28px;background:var(--brand);color:#fff}
     main{max-width:1360px;margin:24px auto;padding:0 20px}
     .card{background:#fff;border-radius:14px;box-shadow:0 2px 10px rgba(2,6,23,.06);padding:18px;margin-bottom:16px}
@@ -199,7 +200,7 @@ BASE = """
     table{width:100%;border-collapse:collapse} th,td{padding:8px;border-bottom:1px solid #eef2f7;text-align:left;white-space:nowrap}
     thead th{background:#f0f4ff}.badge{padding:3px 7px;border-radius:999px;font-size:11px}
     .b-enviado{background:#dbeafe}.b-aprobado{background:#dcfce7}.b-observado{background:#fee2e2}
-    .xscroll{overflow-x:auto}.minw{min-width:1280px}.muted{color:var(--muted)}.si{color:#dc2626;font-weight:600}.today{outline:2px solid #ef4444; outline-offset:-2px; border-radius:4px}
+    .xscroll{overflow-x:auto}.minw{min-width:1280px}.muted{color:#64748b}.si{color:#dc2626;font-weight:600}.today{outline:2px solid #ef4444; outline-offset:-2px; border-radius:4px}
   </style>
 </head>
 <body>
@@ -298,25 +299,7 @@ FORM_TPL = """
 </div>
 """
 
-HIST_TPL = """
-<div class="card">
-  <h2>Historial</h2>
-  <table>
-    <thead><tr><th>Fecha</th><th>Desayunos</th><th>Almuerzos</th><th>Cenas</th><th>Total</th><th>Estado</th><th>Modificado</th></tr></thead>
-    <tbody>
-      {% for r in rows %}
-        <tr>
-          <td>{{ r['fecha'] }}</td><td>{{ r['desayunos'] }}</td><td>{{ r['almuerzos'] }}</td>
-          <td>{{ r['cenas'] }}</td><td>{{ r['total'] }}</td>
-          <td><span class="badge b-{{ r['estado'] }}">{{ r['estado'] }}</span></td>
-          <td>{{ r['updated_at'] }}</td>
-        </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-</div>
-"""
-
+# --- ADMIN resumido: una fila "Dotación" por centro (promedio almuerzo/cena) ---
 ADMIN_TPL = """
 <div class="card" style="display:grid;grid-template-columns:1fr 340px;gap:16px;align-items:start">
   <div>
@@ -370,11 +353,14 @@ ADMIN_TPL = """
       </thead>
       <tbody>
         {% for b in blocks %}
-          <tr><td rowspan="3">{{ b.area }}</td><td rowspan="3">{{ b.centro }}</td>
-            <td><strong>Desayuno</strong></td>{% for d, v in b.des %}<td class="{% if v=='SI' %}si{% endif %} {% if d==today_day %}today{% endif %}">{{ v }}</td>{% endfor %}
+          <tr>
+            <td>{{ b.area }}</td>
+            <td>{{ b.centro }}</td>
+            <td><strong>Dotación</strong></td>
+            {% for d, v in b.dot %}
+              <td class="{% if v=='SI' %}si{% endif %} {% if d==today_day %}today{% endif %}">{{ v }}</td>
+            {% endfor %}
           </tr>
-          <tr><td><strong>Almuerzo</strong></td>{% for d, v in b.alm %}<td class="{% if v=='SI' %}si{% endif %} {% if d==today_day %}today{% endif %}">{{ v }}</td>{% endfor %}</tr>
-          <tr><td><strong>Cena</strong></td>{% for d, v in b.cen %}<td class="{% if v=='SI' %}si{% endif %} {% if d==today_day %}today{% endif %}">{{ v }}</td>{% endfor %}</tr>
         {% endfor %}
       </tbody>
     </table>
@@ -383,12 +369,14 @@ ADMIN_TPL = """
 </div>
 """
 
+
 # -------------------------------------------------
 # Helper render
 # -------------------------------------------------
 def render_page(inner_tpl, **ctx):
     inner = render_template_string(inner_tpl, **ctx)
     return render_template_string(BASE, content=inner, **ctx)
+
 
 # -------------------------------------------------
 # Admin lock routes
@@ -411,6 +399,7 @@ def admin_lock_clear():
     cur.execute(q("UPDATE settings SET value='' WHERE key='lock_until'"))
     conn.commit(); conn.close()
     return redirect(url_for('admin'))
+
 
 # -------------------------------------------------
 # Rutas principales
@@ -451,6 +440,7 @@ def healthz():
 def require_login():
     if not session.get('email'):
         return redirect(url_for('login'))
+
 
 @app.route('/form', methods=['GET', 'POST'])
 def formulario():
@@ -540,6 +530,7 @@ def formulario():
         today_day=today_day, unlock_from=unlock_from, blocks=blocks
     )
 
+
 @app.route('/historial')
 def historial():
     if require_login():
@@ -548,6 +539,7 @@ def historial():
     cur.execute(q('SELECT * FROM reports WHERE email=? ORDER BY fecha DESC'), (session['email'],))
     rows = cur.fetchall(); conn.close()
     return render_page(HIST_TPL, title='Historial', rows=rows)
+
 
 @app.route('/admin')
 def admin():
@@ -594,14 +586,17 @@ def admin():
             cur.execute(q('SELECT area FROM users WHERE centro=? LIMIT 1'), (cname,))
             urow = cur.fetchone(); carea = (urow['area'] if urow else '')
         dmap = {int(r['fecha'].split('-')[-1]): (r['desayunos'], r['almuerzos'], r['cenas']) for r in rws}
-        def aval(d, idx):
+
+        def dot_val(d):
             if d > today_day:
                 return '-'
-            return dmap[d][idx] if d in dmap else 'SI'
-        row_des = [aval(d,0) for d in month_days]
-        row_alm = [aval(d,1) for d in month_days]
-        row_cen = [aval(d,2) for d in month_days]
-        return {'centro': cname,'area': carea,'des': list(zip(month_days,row_des)),'alm': list(zip(month_days,row_alm)),'cen': list(zip(month_days,row_cen))}
+            if d in dmap:
+                _, alm, cen = dmap[d]
+                return round((alm + cen)/2)
+            return 'SI'
+
+        row_dot = [dot_val(d) for d in month_days]
+        return {'centro': cname, 'area': carea, 'dot': list(zip(month_days, row_dot))}
 
     blocks = [build_block(c) for c in centers_to_show]
     conn.close()
@@ -610,6 +605,7 @@ def admin():
         lock_until=lock_until, unlock_from=unlock_from, month_days=month_days, month_label=month_label,
         today_day=today_day, blocks=blocks
     )
+
 
 @app.route('/export.csv')
 def export_csv():
@@ -621,34 +617,52 @@ def export_csv():
     hasta = (request.args.get('hasta') or '').strip()
 
     conn = db(); cur = conn.cursor()
+
     params = []
     where = []
-    ph = '%s' if USE_PG else '?'
+    # construimos con '?' y dejamos que q() convierta a %s si es Postgres
     if area:
-        where.append(f'area = {ph}'); params.append(area)
+        where.append('area = ?'); params.append(area)
     if centro:
-        where.append(f'centro = {ph}'); params.append(centro)
+        where.append('centro = ?'); params.append(centro)
     if desde:
-        where.append(f'fecha >= {ph}'); params.append(desde)
+        where.append('fecha >= ?'); params.append(desde)
     if hasta:
-        where.append(f'fecha <= {ph}'); params.append(hasta)
+        where.append('fecha <= ?'); params.append(hasta)
 
     sql = 'SELECT id, email, area, centro, fecha, desayunos, almuerzos, cenas, total, updated_at FROM reports'
     if where: sql += ' WHERE ' + ' AND '.join(where)
     sql += ' ORDER BY fecha DESC, centro'
-    cur.execute(sql, params)
+    cur.execute(q(sql), params)
     rows = cur.fetchall(); conn.close()
 
     import io, csv
+    from datetime import datetime
+
+    def _fmt_ts(v):
+        try:
+            if hasattr(v, "strftime"):
+                return v.strftime("%Y-%m-%d %H:%M:%S")
+            v2 = str(v).replace("Z", "")
+            return datetime.fromisoformat(v2).strftime("%Y-%m-%d %H:%M:%S")
+        except Exception:
+            return str(v)
+
     buf = io.StringIO()
     w = csv.writer(buf, delimiter=';')
     w.writerow(["id","usuario_carga","area","centro","fecha","nro_desayuno","nro_almuerzo","nro_cena","total","modificado"])
     for r in rows:
-        w.writerow([r["id"], r["email"], r["area"], r["centro"], r["fecha"], r["desayunos"], r["almuerzos"], r["cenas"], r["total"], r["updated_at"]])
+        w.writerow([
+            r["id"], r["email"], r["area"], r["centro"], r["fecha"],
+            r["desayunos"], r["almuerzos"], r["cenas"], r["total"],
+            _fmt_ts(r["updated_at"])
+        ])
+
     import io as iob
     mem = iob.BytesIO(buf.getvalue().encode('utf-8-sig')); mem.seek(0)
     name = f"dotacion_{(desde or 'ini')}_{(hasta or 'fin')}.csv"
     return send_file(mem, mimetype='text/csv', as_attachment=True, download_name=name)
+
 
 # -------------------------------------------------
 # Self-tests (no-op)
@@ -656,12 +670,15 @@ def export_csv():
 def run_self_tests():
     pass
 
+
 def run_server():
     host = os.environ.get('HOST', '0.0.0.0')
     port = int(os.environ.get('PORT', '5000'))
     app.run(host=host, port=port, debug=False, use_reloader=False, threaded=False)
 
+
 if __name__ == '__main__':
     app.jinja_env.globals['BASE'] = BASE
     run_server()
+
 
