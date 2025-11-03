@@ -10,12 +10,11 @@ USE_PG = bool(os.environ.get("DATABASE_URL"))
 PG_DSN = os.environ.get("DATABASE_URL")
 
 if USE_PG:
-    # psycopg v3 (puro Python)
     import psycopg
     from psycopg.rows import dict_row
 
 APP_SECRET = os.environ.get("APP_SECRET", "dev-secret")
-DB_PATH = os.environ.get("APP_DB", "data.db")  # usado sólo si no hay DATABASE_URL
+DB_PATH = os.environ.get("APP_DB", "data.db")  # usado solo si no hay DATABASE_URL
 
 
 def db():
@@ -177,7 +176,7 @@ with app.app_context():
 
 
 # -------------------------------------------------
-# Templates
+# Templates base
 # -------------------------------------------------
 BASE = """
 <!doctype html>
@@ -190,6 +189,8 @@ BASE = """
     body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,'Helvetica Neue',Arial,sans-serif;margin:0;background:var(--bg);color:#0f172a;font-size:14px}
     header{display:flex;justify-content:space-between;align-items:center;padding:28px;background:var(--brand);color:#fff}
     main{max-width:1360px;margin:24px auto;padding:0 20px}
+    a{color:#0ea5e9;text-decoration:none}
+    a:hover{text-decoration:underline}
     .card{background:#fff;border-radius:14px;box-shadow:0 2px 10px rgba(2,6,23,.06);padding:18px;margin-bottom:16px}
     input,select,button{font-size:14px;padding:8px 10px;border-radius:10px;border:1px solid #e5e7eb}
     input[type=date]{padding:6px 8px} label{display:block;margin:8px 0 6px;font-weight:600}
@@ -201,6 +202,9 @@ BASE = """
     thead th{background:#f0f4ff}.badge{padding:3px 7px;border-radius:999px;font-size:11px}
     .b-enviado{background:#dbeafe}.b-aprobado{background:#dcfce7}.b-observado{background:#fee2e2}
     .xscroll{overflow-x:auto}.minw{min-width:1280px}.muted{color:#64748b}.si{color:#dc2626;font-weight:600}.today{outline:2px solid #ef4444; outline-offset:-2px; border-radius:4px}
+    .cell-edit{display:flex;gap:6px;align-items:center}
+    .small{font-size:12px;padding:4px 8px;border-radius:8px}
+    .note{font-size:12px;color:#64748b}
   </style>
 </head>
 <body>
@@ -299,7 +303,7 @@ FORM_TPL = """
 </div>
 """
 
-# --- ADMIN resumido: una fila "Dotación" por centro (promedio almuerzo/cena) ---
+# --- ADMIN resumido: una fila "Dotación" por centro (promedio almuerzo/cena) + link al detalle ---
 ADMIN_TPL = """
 <div class="card" style="display:grid;grid-template-columns:1fr 340px;gap:16px;align-items:start">
   <div>
@@ -355,7 +359,7 @@ ADMIN_TPL = """
         {% for b in blocks %}
           <tr>
             <td>{{ b.area }}</td>
-            <td>{{ b.centro }}</td>
+            <td><a href="{{ url_for('admin_centro', c=b.centro) }}">{{ b.centro }}</a></td>
             <td><strong>Dotación</strong></td>
             {% for d, v in b.dot %}
               <td class="{% if v=='SI' %}si{% endif %} {% if d==today_day %}today{% endif %}">{{ v }}</td>
@@ -365,10 +369,108 @@ ADMIN_TPL = """
       </tbody>
     </table>
   </div>
-  <p style="margin-top:8px;color:#6b7280"><strong>Leyenda:</strong> SI = sin información, - = futuro | <strong>Bloqueado hasta:</strong> {{ lock_until or '—' }} | <strong>Liberado desde:</strong> {{ unlock_from or '—' }}</p>
+  <p class="note">Tip: haz clic en el nombre del centro para abrir el detalle editable.</p>
 </div>
 """
 
+# --- Detalle editable por centro ---
+DETAIL_TPL = """
+<div class="card">
+  <h2 style="margin-top:0">Detalle — {{ centro }}</h2>
+  <p class="note">Haz clic en un valor para editarlo. Escribe el número y pulsa <strong>OK</strong> para guardar.</p>
+  <div class="xscroll">
+    <div class="minw" style="min-width:1280px">
+      <table style="table-layout:fixed">
+        <colgroup>
+          <col style="width:120px"/><col style="width:140px"/>
+          {% for d in month_days %}<col style="width:40px"/>{% endfor %}
+        </colgroup>
+        <thead>
+          <tr><th>Área</th><th>Servicio</th>
+            {% for d in month_days %}<th class="{% if d==today_day %}today{% endif %}">{{ d }}</th>{% endfor %}
+          </tr>
+        </thead>
+        <tbody>
+          {% for svc in ['Desayuno','Almuerzo','Cena'] %}
+            <tr>
+              {% if loop.index == 1 %}<td rowspan="3">{{ area }}</td>{% endif %}
+              <td><strong>{{ svc }}</strong></td>
+              {% set key = 'des' if svc=='Desayuno' else ('alm' if svc=='Almuerzo' else 'cen') %}
+              {% for d, v in rows[key] %}
+                <td class="{% if v=='SI' %}si{% endif %} {% if d==today_day %}today{% endif %}">
+                  {% if v in ['SI','-'] %}
+                    {{ v }}
+                  {% else %}
+                    <span class="cell" data-dia="{{ d }}" data-campo="{{ 'desayunos' if key=='des' else ('almuerzos' if key=='alm' else 'cenas') }}">{{ v }}</span>
+                    <span class="editor" style="display:none">
+                      <input class="small val" type="number" min="0" value="{{ v }}" style="width:68px">
+                      <button class="small okbtn">OK</button>
+                    </span>
+                    <span class="status small" style="display:none">✔️</span>
+                  {% endif %}
+                </td>
+              {% endfor %}
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div class="actions"><a class="warn" href="{{ url_for('admin') }}">← Volver</a></div>
+</div>
+
+<script>
+document.querySelectorAll('span.cell').forEach(function(el){
+  el.addEventListener('click', function(){
+    const td = el.parentElement;
+    td.querySelector('.cell').style.display='none';
+    td.querySelector('.editor').style.display='inline-flex';
+    td.querySelector('.status').style.display='none';
+    td.querySelector('.val').focus();
+  });
+});
+
+document.querySelectorAll('.okbtn').forEach(function(btn){
+  btn.addEventListener('click', async function(e){
+    e.preventDefault();
+    const td = btn.closest('td');
+    const cell = td.querySelector('.cell');
+    const editor = td.querySelector('.editor');
+    const status = td.querySelector('.status');
+    const val = parseInt(td.querySelector('.val').value || '0');
+    const dia = cell.getAttribute('data-dia');
+    const campo = cell.getAttribute('data-campo');
+
+    const payload = {
+      centro: "{{ centro }}",
+      fecha: "{{ year }}-{{ '%02d' % month }}-{{ '%02d' % 1 }}".replace('-01', '-' + ('00'+dia).slice(-2)), // yyyy-mm-dd del día del mes actual
+      campo: campo,
+      valor: val
+    };
+
+    try{
+      const r = await fetch("{{ url_for('admin_update') }}", {
+        method: "POST",
+        headers: {"Content-Type":"application/json"},
+        body: JSON.stringify(payload)
+      });
+      const j = await r.json();
+      if(j.ok){
+        cell.textContent = val;
+        editor.style.display='none';
+        cell.style.display='inline';
+        status.style.display='inline';
+        setTimeout(()=>{ status.style.display='none'; }, 1200);
+      }else{
+        alert("Error: " + (j.error||"no se pudo guardar"));
+      }
+    }catch(err){
+      alert("Error de red");
+    }
+  });
+});
+</script>
+"""
 
 # -------------------------------------------------
 # Helper render
@@ -538,9 +640,12 @@ def historial():
     conn = db(); cur = conn.cursor()
     cur.execute(q('SELECT * FROM reports WHERE email=? ORDER BY fecha DESC'), (session['email'],))
     rows = cur.fetchall(); conn.close()
-    return render_page(HIST_TPL, title='Historial', rows=rows)
+    return render_page(LOGIN_TPL.replace("Ingresar","Historial").replace("</form>",""), title='Historial', rows=rows)  # simple
 
 
+# -------------------------------------------------
+# ADMIN (resumen con link al detalle)
+# -------------------------------------------------
 @app.route('/admin')
 def admin():
     if not session.get('email') or session['email'] not in ADMIN_EMAILS:
@@ -607,6 +712,114 @@ def admin():
     )
 
 
+# -------------------------------------------------
+# ADMIN — Detalle editable por centro
+# -------------------------------------------------
+@app.route('/admin/centro')
+def admin_centro():
+    if not session.get('email') or session['email'] not in ADMIN_EMAILS:
+        return redirect(url_for('login'))
+    centro = (request.args.get('c') or '').strip()
+    if not centro:
+        return redirect(url_for('admin'))
+
+    conn = db(); cur = conn.cursor()
+    # área
+    cur.execute(q('SELECT area FROM users WHERE centro=? LIMIT 1'), (centro,))
+    u = cur.fetchone()
+    area = u['area'] if u else ''
+
+    today = date.today()
+    first_day = today.replace(day=1)
+    next_month = first_day.replace(year=first_day.year+1, month=1) if first_day.month == 12 else first_day.replace(month=first_day.month+1)
+    last_day = (next_month - __import__('datetime').timedelta(days=1)).day
+    month_days = list(range(1, last_day+1))
+    today_day = today.day
+    year, month = today.year, today.month
+
+    cur.execute(q('SELECT fecha, desayunos, almuerzos, cenas FROM reports WHERE centro=? AND fecha BETWEEN ? AND ? ORDER BY fecha'),
+                (centro, first_day.isoformat(), today.replace(day=last_day).isoformat()))
+    rws = cur.fetchall(); conn.close()
+    dmap = {int(r['fecha'].split('-')[-1]): (r['desayunos'], r['almuerzos'], r['cenas']) for r in rws}
+
+    def val_for(d, idx):
+        if d > today_day:
+            return '-'
+        return dmap[d][idx] if d in dmap else 'SI'
+
+    row_des = [val_for(d,0) for d in month_days]
+    row_alm = [val_for(d,1) for d in month_days]
+    row_cen = [val_for(d,2) for d in month_days]
+
+    return render_page(
+        DETAIL_TPL, title=f'Detalle {centro}', centro=centro, area=area,
+        month_days=month_days, today_day=today_day,
+        rows={'des': list(zip(month_days, row_des)),
+              'alm': list(zip(month_days, row_alm)),
+              'cen': list(zip(month_days, row_cen))},
+        year=year, month=month
+    )
+
+
+# -------------------------------------------------
+# ADMIN — API update (guardar edición inmediata)
+# -------------------------------------------------
+@app.post('/admin/update')
+def admin_update():
+    if not session.get('email') or session['email'] not in ADMIN_EMAILS:
+        return jsonify(ok=False, error="no_auth"), 403
+    data = request.get_json(force=True, silent=True) or {}
+    centro = (data.get('centro') or '').strip()
+    fecha  = (data.get('fecha') or '').strip()
+    campo  = (data.get('campo') or '').strip()   # desayunos | almuerzos | cenas
+    try:
+        valor = int(data.get('valor'))
+        if valor < 0: raise ValueError
+    except Exception:
+        return jsonify(ok=False, error="valor_invalido"), 400
+
+    if campo not in ('desayunos','almuerzos','cenas') or not centro or not fecha:
+        return jsonify(ok=False, error="payload_invalido"), 400
+
+    conn = db(); cur = conn.cursor()
+    # Buscar un user de ese centro para llenar user_id/email/area
+    cur.execute(q('SELECT id, email, area FROM users WHERE centro=? LIMIT 1'), (centro,))
+    u = cur.fetchone()
+    if not u:
+        conn.close()
+        return jsonify(ok=False, error="centro_no_configurado"), 400
+
+    # ¿Existe report para ese centro-fecha?
+    cur.execute(q('SELECT id, desayunos, almuerzos, cenas FROM reports WHERE centro=? AND fecha=? LIMIT 1'), (centro, fecha))
+    r = cur.fetchone()
+
+    if r:
+        # update campo y total
+        des, alm, cen = r['desayunos'], r['almuerzos'], r['cenas']
+        if campo == 'desayunos': des = valor
+        elif campo == 'almuerzos': alm = valor
+        else: cen = valor
+        total = des + alm + cen
+        cur.execute(q(f'UPDATE reports SET {campo}=?, total=?, updated_at=CURRENT_TIMESTAMP WHERE id=?'),
+                    (valor, total, r['id']))
+    else:
+        # insert con ceros excepto campo editado
+        des = valor if campo == 'desayunos' else 0
+        alm = valor if campo == 'almuerzos' else 0
+        cen = valor if campo == 'cenas' else 0
+        total = des + alm + cen
+        cur.execute(q("""
+            INSERT INTO reports(user_id, email, centro, area, fecha, desayunos, almuerzos, cenas, total)
+            VALUES (?,?,?,?,?,?,?,?,?)
+        """), (u['id'], u['email'], centro, u['area'], fecha, des, alm, cen, total))
+
+    conn.commit(); conn.close()
+    return jsonify(ok=True)
+
+
+# -------------------------------------------------
+# CSV export (modificado sin microsegundos)
+# -------------------------------------------------
 @app.route('/export.csv')
 def export_csv():
     if not session.get('email') or session['email'] not in ADMIN_EMAILS:
@@ -617,10 +830,8 @@ def export_csv():
     hasta = (request.args.get('hasta') or '').strip()
 
     conn = db(); cur = conn.cursor()
-
     params = []
     where = []
-    # construimos con '?' y dejamos que q() convierta a %s si es Postgres
     if area:
         where.append('area = ?'); params.append(area)
     if centro:
@@ -670,15 +881,12 @@ def export_csv():
 def run_self_tests():
     pass
 
-
 def run_server():
     host = os.environ.get('HOST', '0.0.0.0')
     port = int(os.environ.get('PORT', '5000'))
     app.run(host=host, port=port, debug=False, use_reloader=False, threaded=False)
 
-
 if __name__ == '__main__':
     app.jinja_env.globals['BASE'] = BASE
     run_server()
-
 
