@@ -4,22 +4,34 @@ from datetime import date
 import sqlite3
 
 # -------------------------------------------------
-# MODO BD (Forzado a SQLite para evitar psycopg2)
+# MODO BD (Auto: Postgres si hay DATABASE_URL; si no, SQLite)
 # -------------------------------------------------
-# Aunque exista DATABASE_URL en el entorno, forzamos SQLite
-USE_PG = False
+USE_PG = bool(os.environ.get("DATABASE_URL"))
+PG_DSN = os.environ.get("DATABASE_URL")
+
+if USE_PG:
+    # psycopg v3 (puro Python). NO usar psycopg2.
+    import psycopg
+    from psycopg.rows import dict_row
+
 APP_SECRET = os.environ.get("APP_SECRET", "dev-secret")
-DB_PATH = os.environ.get("APP_DB", "data.db")  # BD local (archivo)
+DB_PATH = os.environ.get("APP_DB", "data.db")  # usado sólo si no hay DATABASE_URL
+
 
 def db():
-    """Conexión SQLite (siempre)."""
+    """Conexión a la BD (Postgres o SQLite)."""
+    if USE_PG:
+        # row_factory=dict_row devuelve filas como dict (similar a sqlite3.Row)
+        return psycopg.connect(PG_DSN, row_factory=dict_row)
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
 
+
 def q(sql: str) -> str:
-    """Compat: en este modo simplemente devuelve el SQL tal cual."""
-    return sql
+    """Compatibilidad de placeholders: '?' -> '%s' si estamos en Postgres."""
+    return sql.replace('?', '%s') if USE_PG else sql
+
 
 # -------------------------------------------------
 # APP
@@ -52,64 +64,114 @@ AREAS = sorted({a for _, _, a in CENTROS})
 CENTRO_NOMBRES = sorted({c for _, c, _ in CENTROS})
 
 # -------------------------------------------------
-# INIT DB (SQLite)
+# INIT DB (dual: Postgres o SQLite)
 # -------------------------------------------------
 def init_db():
     conn = db()
     cur = conn.cursor()
 
-    # users
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            email TEXT UNIQUE NOT NULL,
-            centro TEXT NOT NULL,
-            area TEXT NOT NULL
-        );
-    """)
+    if USE_PG:
+        # --- Postgres
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id SERIAL PRIMARY KEY,
+                email TEXT UNIQUE NOT NULL,
+                centro TEXT NOT NULL,
+                area TEXT NOT NULL
+            );
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS reports (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                email TEXT NOT NULL,
+                centro TEXT NOT NULL,
+                area TEXT NOT NULL,
+                fecha TEXT NOT NULL,
+                desayunos INTEGER NOT NULL,
+                almuerzos INTEGER NOT NULL,
+                cenas INTEGER NOT NULL,
+                total INTEGER NOT NULL,
+                estado TEXT NOT NULL DEFAULT 'enviado',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(email, fecha)
+            );
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            );
+        """)
+        # lock_until default
+        cur.execute("""
+            INSERT INTO settings(key, value)
+            VALUES ('lock_until','')
+            ON CONFLICT (key) DO NOTHING;
+        """)
+        # seed centros
+        for email, centro, area in CENTROS:
+            cur.execute("""
+                INSERT INTO users(email, centro, area)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (email) DO NOTHING;
+            """, (email, centro, area))
+        # seed admins
+        for adm in ADMIN_EMAILS:
+            cur.execute("""
+                INSERT INTO users(email, centro, area)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (email) DO NOTHING;
+            """, (adm.strip().lower(), 'ADMIN', 'SERVICIOS'))
 
-    # reports
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS reports (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            email TEXT NOT NULL,
-            centro TEXT NOT NULL,
-            area TEXT NOT NULL,
-            fecha TEXT NOT NULL,
-            desayunos INTEGER NOT NULL,
-            almuerzos INTEGER NOT NULL,
-            cenas INTEGER NOT NULL,
-            total INTEGER NOT NULL,
-            estado TEXT NOT NULL DEFAULT 'enviado',
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE(email, fecha)
-        );
-    """)
-
-    # settings
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS settings (
-            key TEXT PRIMARY KEY,
-            value TEXT
-        );
-    """)
-    cur.execute("INSERT OR IGNORE INTO settings(key, value) VALUES ('lock_until','')")
-
-    # seed centros
-    for email, centro, area in CENTROS:
-        cur.execute("INSERT OR IGNORE INTO users(email, centro, area) VALUES (?,?,?)", (email, centro, area))
-    # seed admins
-    for adm in ADMIN_EMAILS:
-        cur.execute("INSERT OR IGNORE INTO users(email, centro, area) VALUES (?,?,?)",
-                    (adm.strip().lower(), 'ADMIN', 'SERVICIOS'))
+    else:
+        # --- SQLite
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                email TEXT UNIQUE NOT NULL,
+                centro TEXT NOT NULL,
+                area TEXT NOT NULL
+            );
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS reports (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                email TEXT NOT NULL,
+                centro TEXT NOT NULL,
+                area TEXT NOT NULL,
+                fecha TEXT NOT NULL,
+                desayunos INTEGER NOT NULL,
+                almuerzos INTEGER NOT NULL,
+                cenas INTEGER NOT NULL,
+                total INTEGER NOT NULL,
+                estado TEXT NOT NULL DEFAULT 'enviado',
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(email, fecha)
+            );
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            );
+        """)
+        cur.execute("INSERT OR IGNORE INTO settings(key, value) VALUES ('lock_until','')")
+        for email, centro, area in CENTROS:
+            cur.execute("INSERT OR IGNORE INTO users(email, centro, area) VALUES (?,?,?)", (email, centro, area))
+        for adm in ADMIN_EMAILS:
+            cur.execute("INSERT OR IGNORE INTO users(email, centro, area) VALUES (?,?,?)",
+                        (adm.strip().lower(), 'ADMIN', 'SERVICIOS'))
 
     conn.commit()
     conn.close()
 
+
 with app.app_context():
-    if os.path.dirname(DB_PATH):
+    if not USE_PG and os.path.dirname(DB_PATH):
         os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     init_db()
 
@@ -329,7 +391,7 @@ def render_page(inner_tpl, **ctx):
     return render_template_string(BASE, content=inner, **ctx)
 
 # -------------------------------------------------
-# Admin lock routes (SQLite)
+# Admin lock routes
 # -------------------------------------------------
 @app.route('/admin/lock', methods=['POST'])
 def admin_lock():
@@ -337,7 +399,7 @@ def admin_lock():
         return redirect(url_for('login'))
     lock_until = (request.form.get('lock_until') or '').strip()
     conn = db(); cur = conn.cursor()
-    cur.execute("UPDATE settings SET value=? WHERE key='lock_until'", (lock_until,))
+    cur.execute(q("UPDATE settings SET value=? WHERE key='lock_until'"), (lock_until,))
     conn.commit(); conn.close()
     return redirect(url_for('admin'))
 
@@ -346,7 +408,7 @@ def admin_lock_clear():
     if not session.get('email') or session['email'] not in ADMIN_EMAILS:
         return redirect(url_for('login'))
     conn = db(); cur = conn.cursor()
-    cur.execute("UPDATE settings SET value='' WHERE key='lock_until'")
+    cur.execute(q("UPDATE settings SET value='' WHERE key='lock_until'"))
     conn.commit(); conn.close()
     return redirect(url_for('admin'))
 
@@ -364,7 +426,7 @@ def login():
     if request.method == 'POST':
         email = (request.form.get('email') or '').strip().lower()
         conn = db(); cur = conn.cursor()
-        cur.execute('SELECT * FROM users WHERE email=?', (email,))
+        cur.execute(q('SELECT * FROM users WHERE email=?'), (email,))
         u = cur.fetchone(); conn.close()
         if not u:
             return render_page(LOGIN_TPL, title='Ingresar', error='Correo no habilitado. Solicita a Servicios/TI el alta de tu centro.')
@@ -405,7 +467,7 @@ def formulario():
     selected_fecha = ''
 
     conn = db(); cur = conn.cursor()
-    cur.execute("SELECT value FROM settings WHERE key='lock_until'")
+    cur.execute(q("SELECT value FROM settings WHERE key='lock_until'"))
     row = cur.fetchone(); lock_until = (row['value'] or '').strip() if row else ''
     unlock_from = ''
     if lock_until:
@@ -433,22 +495,22 @@ def formulario():
             else:
                 total = des + alm + cen
                 cur2 = db().cursor()
-                cur2.execute('SELECT 1 FROM reports WHERE email=? AND fecha=?', (session['email'], fecha))
+                cur2.execute(q('SELECT 1 FROM reports WHERE email=? AND fecha=?'), (session['email'], fecha))
                 exists = cur2.fetchone() is not None
                 if exists:
                     msg_err = 'Ese día ya está cargado. Si necesitas corregirlo, contacta a Servicios.'
                 else:
                     conn2 = db(); c2 = conn2.cursor()
-                    c2.execute("""
+                    c2.execute(q("""
                         INSERT INTO reports(user_id, email, centro, area, fecha, desayunos, almuerzos, cenas, total)
                         VALUES (?,?,?,?,?,?,?,?,?)
-                    """, (session['user_id'], session['email'], session['centro'], session['area'], fecha, des, alm, cen, total))
+                    """), (session['user_id'], session['email'], session['centro'], session['area'], fecha, des, alm, cen, total))
                     conn2.commit(); conn2.close()
                     msg_ok = 'Registro enviado.'
                     datos = {"desayunos":des, "almuerzos":alm, "cenas":cen, "total":total}
                     selected_fecha = ''
 
-    cur.execute('SELECT fecha, desayunos, almuerzos, cenas FROM reports WHERE email=? AND fecha BETWEEN ? AND ? ORDER BY fecha',
+    cur.execute(q('SELECT fecha, desayunos, almuerzos, cenas FROM reports WHERE email=? AND fecha BETWEEN ? AND ? ORDER BY fecha'),
                 (session['email'], first_day.isoformat(), today.replace(day=last_day).isoformat()))
     rows = cur.fetchall(); conn.close()
     day_map = {int(r['fecha'].split('-')[-1]): (r['desayunos'], r['almuerzos'], r['cenas']) for r in rows}
@@ -483,7 +545,7 @@ def historial():
     if require_login():
         return require_login()
     conn = db(); cur = conn.cursor()
-    cur.execute('SELECT * FROM reports WHERE email=? ORDER BY fecha DESC', (session['email'],))
+    cur.execute(q('SELECT * FROM reports WHERE email=? ORDER BY fecha DESC'), (session['email'],))
     rows = cur.fetchall(); conn.close()
     return render_page(HIST_TPL, title='Historial', rows=rows)
 
@@ -495,7 +557,7 @@ def admin():
     centro = (request.args.get('centro') or '').strip()
 
     conn = db(); cur = conn.cursor()
-    cur.execute("SELECT value FROM settings WHERE key='lock_until'")
+    cur.execute(q("SELECT value FROM settings WHERE key='lock_until'"))
     srow = cur.fetchone(); lock_until = (srow['value'] or '').strip() if srow else ''
     from datetime import datetime, timedelta
     unlock_from = ''
@@ -515,21 +577,21 @@ def admin():
     today_day = today.day
 
     if area:
-        cur.execute("SELECT centro FROM users WHERE area=? AND centro NOT IN ('ADMIN','AREA AYSEN') ORDER BY centro", (area,))
+        cur.execute(q("SELECT centro FROM users WHERE area=? AND centro NOT IN ('ADMIN','AREA AYSEN') ORDER BY centro"), (area,))
     else:
-        cur.execute("SELECT centro FROM users WHERE centro NOT IN ('ADMIN','AREA AYSEN') ORDER BY centro")
+        cur.execute(q("SELECT centro FROM users WHERE centro NOT IN ('ADMIN','AREA AYSEN') ORDER BY centro"))
     centers_all = [r['centro'] for r in cur.fetchall()]
     CENTROS_OPT = centers_all[:]
     centers_to_show = [c for c in centers_all if (not centro or c == centro)]
 
     def build_block(cname: str):
-        cur.execute('SELECT fecha, desayunos, almuerzos, cenas, area FROM reports WHERE centro=? AND fecha BETWEEN ? AND ? ORDER BY fecha',
+        cur.execute(q('SELECT fecha, desayunos, almuerzos, cenas, area FROM reports WHERE centro=? AND fecha BETWEEN ? AND ? ORDER BY fecha'),
                     (cname, first_day.isoformat(), today.replace(day=last_day).isoformat()))
         rws = cur.fetchall()
         if rws:
             carea = rws[0]['area']
         else:
-            cur.execute('SELECT area FROM users WHERE centro=? LIMIT 1', (cname,))
+            cur.execute(q('SELECT area FROM users WHERE centro=? LIMIT 1'), (cname,))
             urow = cur.fetchone(); carea = (urow['area'] if urow else '')
         dmap = {int(r['fecha'].split('-')[-1]): (r['desayunos'], r['almuerzos'], r['cenas']) for r in rws}
         def aval(d, idx):
@@ -561,14 +623,15 @@ def export_csv():
     conn = db(); cur = conn.cursor()
     params = []
     where = []
+    ph = '%s' if USE_PG else '?'
     if area:
-        where.append('area = ?'); params.append(area)
+        where.append(f'area = {ph}'); params.append(area)
     if centro:
-        where.append('centro = ?'); params.append(centro)
+        where.append(f'centro = {ph}'); params.append(centro)
     if desde:
-        where.append('fecha >= ?'); params.append(desde)
+        where.append(f'fecha >= {ph}'); params.append(desde)
     if hasta:
-        where.append('fecha <= ?'); params.append(hasta)
+        where.append(f'fecha <= {ph}'); params.append(hasta)
 
     sql = 'SELECT id, email, area, centro, fecha, desayunos, almuerzos, cenas, total, updated_at FROM reports'
     if where: sql += ' WHERE ' + ' AND '.join(where)
